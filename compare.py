@@ -5,6 +5,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+from __future__ import unicode_literals
 
 from scipy import misc
 import tensorflow as tf
@@ -22,10 +23,14 @@ import matplotlib.patches as patches
 
 def main(args):
 
-    images = load_and_align_data(args.image_files, args.image_size, args.margin, args.gpu_memory_fraction)
-    plt.figure()
-    plt.imshow(images[1,:])
-    plt.show()
+    aligned,nrof_face_list= load_and_align_data(args.image_files, args.image_size, args.margin, args.gpu_memory_fraction)
+    img_list=[]
+    for i in aligned:
+        prewhitened = facenet.prewhiten(i)
+        img_list.append(prewhitened)
+    images = np.stack(img_list)
+
+
 
 
     with tf.Graph().as_default():
@@ -46,22 +51,39 @@ def main(args):
             
             nrof_images = len(args.image_files)
 
-            print('Images:')
-            for i in range(nrof_images):
-                print('%1d: %s' % (i, args.image_files[i]))
-            print('')
-            
-            # Print distance matrix
-            print('Distance matrix')
-            print('    ', end='')
-            for i in range(nrof_images):
-                print('    %1d     ' % i, end='')
-            print('')
-            for i in range(nrof_images):
+
+
+            loc_face=nrof_face_list[0]
+            for i in range(nrof_face_list[0]):
                 print('%1d  ' % i, end='')
-                for j in range(nrof_images):
-                    dist = np.sqrt(np.sum(np.square(np.subtract(emb[i,:], emb[j,:]))))
-                    print('  %1.4f  ' % dist, end='')
+                for j in range(1,nrof_images):
+                    min_dist=1
+                    min_face=0
+                    for k in range(nrof_face_list[j]):
+                        dist = np.sqrt(np.sum(np.square(np.subtract(emb[i,:], emb[loc_face,:]))))
+
+                        print('%s  face %i 相似度 %1.4f ' % (args.image_files[j] , k , dist))
+                        if dist<min_dist:
+                            min_dist=dist
+                            min_face=loc_face
+                        loc_face += 1
+
+
+                    if min_dist>=0.8:
+                        print("no similar face")
+                        pass
+                    else:
+                        plt.figure("最相似的人脸")
+                        plt.subplot(121)
+                        plt.imshow(aligned[i])
+                        plt.subplot(122)
+                        plt.imshow(aligned[min_face])
+                        #plt.text(0,0,"相似度高",fontproperties="SimHei",color="r")
+                        plt.show()
+
+
+
+
                 print('')
 
 
@@ -85,6 +107,7 @@ def load_and_align_data(image_paths, image_size, margin, gpu_memory_fraction):
 
     tmp_image_paths = image_paths.copy()
     img_list = []
+    nrof_face_list=[]
     for image in tmp_image_paths:
         img = misc.imread(os.path.expanduser(image), mode='RGB')
         img_size = np.asarray(img.shape)[0:2]
@@ -96,29 +119,29 @@ def load_and_align_data(image_paths, image_size, margin, gpu_memory_fraction):
            print("can't detect face, remove ", image)
            continue
         nrof_faces = bounding_boxes.shape[0]  # 人脸数目
+        nrof_face_list.append(nrof_faces)
         print('{}找到人脸数目为：{}'.format(image,nrof_faces))
-        det = np.squeeze(bounding_boxes[0,0:4])  #去掉了最后一个元素？
-        bb = np.zeros(4, dtype=np.int32)
-        ##np.maximum：(X, Y, out=None) #X 与 Y 逐位比较取其大者；相当于矩阵个元素比较
-        bb[0] = np.maximum(det[0]-margin/2, 0)#margin：人脸的宽和高？默认为44
-        bb[1] = np.maximum(det[1]-margin/2, 0)
-        bb[2] = np.minimum(det[2]+margin/2, img_size[1])
-        bb[3] = np.minimum(det[3]+margin/2, img_size[0])
-        cropped = img[bb[1]:bb[3],bb[0]:bb[2],:]
-        plt.figure(image)
-        plt.imshow(img)
-        currentAxis = plt.gca()
-        rect = patches.Rectangle((bb[0], bb[1]), bb[2]-bb[0], bb[3]-bb[1], linewidth=1, edgecolor='r', facecolor='none')
-        currentAxis.add_patch(rect)
+        for i in range(nrof_faces):
+            det = np.squeeze(bounding_boxes[i,0:4])  #去掉了最后一个元素？
+            bb = np.zeros(4, dtype=np.int32)
+            ##np.maximum：(X, Y, out=None) #X 与 Y 逐位比较取其大者；相当于矩阵个元素比较
+            bb[0] = np.maximum(det[0]-margin/2, 0)#margin：人脸的宽和高？默认为44
+            bb[1] = np.maximum(det[1]-margin/2, 0)
+            bb[2] = np.minimum(det[2]+margin/2, img_size[1])
+            bb[3] = np.minimum(det[3]+margin/2, img_size[0])
+            cropped = img[bb[1]:bb[3],bb[0]:bb[2],:]
+            aligned = misc.imresize(cropped, (image_size, image_size), interp='bilinear')
+
+            img_list.append(aligned)
+
+            plt.figure(image)
+            plt.imshow(img)
+            #框出人脸
+            currentAxis = plt.gca()
+            rect = patches.Rectangle((bb[0], bb[1]), bb[2]-bb[0], bb[3]-bb[1], linewidth=1, edgecolor='r', facecolor='none')
+            currentAxis.add_patch(rect)
         plt.show()
-        #cropped = img
-        aligned = misc.imresize(cropped, (image_size, image_size), interp='bilinear')
-        plt.imshow(aligned)
-        plt.show()
-        prewhitened = facenet.prewhiten(aligned)
-        img_list.append(prewhitened)
-    images = np.stack(img_list)
-    return images
+    return img_list,nrof_face_list
     # return img
 
 def parse_arguments(argv):
