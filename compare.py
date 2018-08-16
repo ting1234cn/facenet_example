@@ -70,15 +70,19 @@ def main(args):
 
 
                     if min_dist>=0.8:
-                        print("no similar face")
+                        print("min dist %f ,no similar face" %min_dist)
                         pass
                     else:
-                        plt.figure("最相似的人脸")
+                        print("min dist %f" % min_dist)
+                        #plt.figure("最相似的人脸",)
                         plt.subplot(121)
                         plt.imshow(aligned[i])
+
                         plt.subplot(122)
                         plt.imshow(aligned[min_face])
-                        #plt.text(0,0,"相似度高",fontproperties="SimHei",color="r")
+                        plt.title("最相似的人脸",fontproperties="SimHei",color="r")
+                        #plt.suptitle("最相似的人脸",fontproperties="SimHei",color="r")
+
                         plt.show()
 
 
