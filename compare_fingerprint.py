@@ -10,65 +10,99 @@ import sys
 import os
 import argparse
 import facenet
-import matplotlib.pyplot as plt
 import time
 
 
 def main(args):
-    aligned = load_and_align_data(args.image_files, args.image_size, args.margin,
+    dist_list = []
+    aligned = []
+
+    #设置GPU Option
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
+    config = tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)  # set GPU option
+
+    template_exp = os.path.expanduser(args.template)
+    if (os.path.isfile(template_exp)):
+        template_emb=np.load(template_exp)
+        num_template = len(template_emb)
+
+    else:
+        template = facenet.get_dataset(args.template)
+        num_template=len(template[0].image_paths)
+        aligned = load_and_align_data(template[0].image_paths, args.image_size, args.margin,
                                                   args.gpu_memory_fraction)
-    img_list = []
-    for i in aligned:
-        prewhitened = facenet.prewhiten(i)
-        img_list.append(prewhitened)
-    images = np.stack(img_list)
+    dataset=facenet.get_dataset(args.to_be_verified)
+    num_target_class=len(dataset)
+    class_index=0
+    target_image_index=[]
+    while class_index <num_target_class:
+        target_image_list=load_and_align_data(dataset[class_index].image_paths, args.image_size, args.margin,
+                                                  args.gpu_memory_fraction)
+        target_image_index.append(len(target_image_list))
+        aligned=aligned[:num_template]
+        aligned.extend(target_image_list)
 
-    with tf.Graph().as_default():
+        num_to_be_verified=len(dataset[class_index].image_paths)
+        img_list = []
+        for i in aligned:
+            prewhitened = facenet.prewhiten(i)
+            #prewhitened =i
+            img_list.append(prewhitened[:,:,np.newaxis])  #增加一维，满足灰度model 160x160x1的输入维度要求，如果是RGB model则不需要
+        images = np.stack(img_list)
 
-        with tf.Session() as sess:
+        with tf.Graph().as_default():
 
-            # Load the model
-            facenet.load_model(args.model)
+            with tf.Session() as sess:
 
-            # Get input and output tensors
-            images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
-            embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
-            phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
+                facenet.load_model(args.model)
+                 # Get input and output tensors
+                images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
+                embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
 
-            # Run forward pass to calculate embeddings
-            feed_dict = {images_placeholder: images, phase_train_placeholder: False}
+                phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
 
-
-            print("start run model",time.time())#run model start timestamp
-            emb = sess.run(embeddings, feed_dict=feed_dict)
-            #run model finished time
-            print("run model finished", time.time())
-
-            nrof_images = len(args.image_files)
-
-            plt.subplot(1,nrof_images,1)
-            plt.imshow(aligned[0])
-            plt.title("模板指纹" + args.image_files[0], fontproperties="SimHei", color="r")
-            for i in range(1,nrof_images):
-                dist = np.sqrt(np.sum(np.square(np.subtract(emb[0, :], emb[i, :]))))
-
-                print('%s   相似度 %1.4f ' % (args.image_files[i], dist))
+                # Run forward pass to calculate embeddings
+                feed_dict = {images_placeholder: images, phase_train_placeholder: False}
 
 
-                if dist >= 0.5:
-                    print("dist %f ,no similar fingerprint" % dist)
+                print("start run model",time.time())#run model start timestamp
+                emb=sess.run(embeddings, feed_dict=feed_dict)
+                if (os.path.isfile(template_exp)):
+                    emb=np.vstack((template_emb,emb))
+                #run model finished time
+                print("run model finished", time.time())
 
-                    plt.subplot(1,nrof_images,i+1)
-                    plt.imshow(aligned[i])
-                    plt.title("不相似"+args.image_files[i], fontproperties="SimHei", color="r")
 
-                else:
-                    print(" dist %f" % dist)
-                    plt.subplot(1,nrof_images,i+1)
-                    plt.imshow(aligned[i])
-                    plt.title("相似"+args.image_files[i], fontproperties="SimHei", color="r")
 
-            plt.show()
+
+                for i in range(num_to_be_verified):
+                    best_dist=[]  #设置初始值比较大
+                    for j in range(num_template):
+                        dist = np.sqrt(np.sum(np.square(np.subtract(emb[j, :], emb[i+num_template, :]))))
+                        best_dist.append(dist)
+                    average_dist=min(best_dist)
+                    if average_dist<0.8:
+                        dist_list.append((dataset[class_index].image_paths[i],"match",average_dist))
+                        print(
+                            '匹配 %s  %d 相似度 %1.4f ' % (dataset[class_index].image_paths[i], best_dist.index(average_dist), average_dist))
+                    else:
+                        dist_list.append((dataset[class_index].image_paths[i], "no_match", average_dist))
+                        print('不匹配 %s  %d 相似度 %1.4f ' % (dataset[class_index].image_paths[i],best_dist.index(average_dist), average_dist))
+
+
+                if (os.path.isdir(template_exp)):
+                    np.save(template_exp+"template.npy",emb[:num_template])
+        class_index+=1
+
+    np.savetxt("data.csv", np.asarray(dist_list), fmt="%s", delimiter="\t")
+
+
+
+
+
+
 
 
 
@@ -84,7 +118,7 @@ def load_and_align_data(image_paths, image_size, margin, gpu_memory_fraction):
     img_list = []
 
     for image in tmp_image_paths:
-        img = misc.imread(os.path.expanduser(image), mode='RGB')
+        img = misc.imread(os.path.expanduser(image), mode='L')
         img_size = np.asarray(img.shape)[0:2]
 
 
@@ -103,13 +137,16 @@ def parse_arguments(argv):
 
     parser.add_argument('model', type=str,
                         help='Could be either a directory containing the meta_file and ckpt_file or a model protobuf (.pb) file')
-    parser.add_argument('image_files', type=str, nargs='+', help='Images to compare')
+    parser.add_argument('template', type=str,
+                        help='template data file or Path to the data directory containing template fingerprint.')
+    parser.add_argument('to_be_verified', type=str,
+                        help=' Path to the data directory containing to be verified fingerprint.')
     parser.add_argument('--image_size', type=int,
                         help='Image size (height, width) in pixels.', default=160)
     parser.add_argument('--margin', type=int,
                         help='Margin for the crop around the bounding box (height, width) in pixels.', default=44)
     parser.add_argument('--gpu_memory_fraction', type=float,
-                        help='Upper bound on the amount of GPU memory that will be used by the process.', default=1.0)
+                        help='Upper bound on the amount of GPU memory that will be used by the process.', default=0.2)
     return parser.parse_args(argv)
 
 
