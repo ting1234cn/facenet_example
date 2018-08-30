@@ -16,6 +16,7 @@ import time
 def main(args):
     dist_list = []
     aligned = []
+    template_emb=[]
 
     #设置GPU Option
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
@@ -33,73 +34,82 @@ def main(args):
         num_template=len(template[0].image_paths)
         aligned = load_and_align_data(template[0].image_paths, args.image_size, args.margin,
                                                   args.gpu_memory_fraction)
+        template_images=get_images(aligned)
+
     dataset=facenet.get_dataset(args.to_be_verified)
     num_target_class=len(dataset)
     class_index=0
     target_image_index=[]
-    while class_index <num_target_class:
-        target_image_list=load_and_align_data(dataset[class_index].image_paths, args.image_size, args.margin,
-                                                  args.gpu_memory_fraction)
-        target_image_index.append(len(target_image_list))
-        aligned=aligned[:num_template]
-        aligned.extend(target_image_list)
+    with tf.Graph().as_default():
 
-        num_to_be_verified=len(dataset[class_index].image_paths)
-        img_list = []
-        for i in aligned:
-            prewhitened = facenet.prewhiten(i)
-            #prewhitened =i
-            img_list.append(prewhitened[:,:,np.newaxis])  #增加一维，满足灰度model 160x160x1的输入维度要求，如果是RGB model则不需要
-        images = np.stack(img_list)
+        with tf.Session() as sess:
+            facenet.load_model(args.model)
+            # Get input and output tensors
+            images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
+            embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
+            phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
+            if len(template_emb)==0:
+                # Run forward pass to calculate embeddings
+                feed_dict = {images_placeholder: template_images, phase_train_placeholder: False}
+                print("start run model", time.time())  # run model start timestamp
+                template_emb = sess.run(embeddings, feed_dict=feed_dict)
+                print("run model finished", time.time())
 
-        with tf.Graph().as_default():
+            while class_index <num_target_class:
+                target_image_list=load_and_align_data(dataset[class_index].image_paths, args.image_size, args.margin,
+                                                          args.gpu_memory_fraction)
+                target_image_index.append(len(target_image_list))
+                aligned=aligned[:num_template]
+                aligned.extend(target_image_list)
 
-            with tf.Session() as sess:
+                num_to_be_verified=len(dataset[class_index].image_paths)
+                target_images=get_images(aligned)
 
-                facenet.load_model(args.model)
-                 # Get input and output tensors
-                images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
-                embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
 
-                phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
 
                 # Run forward pass to calculate embeddings
-                feed_dict = {images_placeholder: images, phase_train_placeholder: False}
+                feed_dict = {images_placeholder: target_images, phase_train_placeholder: False}
 
 
                 print("start run model",time.time())#run model start timestamp
                 emb=sess.run(embeddings, feed_dict=feed_dict)
-                if (os.path.isfile(template_exp)):
-                    emb=np.vstack((template_emb,emb))
-                #run model finished time
+
+                emb=np.vstack((template_emb,emb))#把templdate emb 和target emb 组合成一个数组，这样不用修改以前的比较算法
+
                 print("run model finished", time.time())
 
-
-
-
                 for i in range(num_to_be_verified):
-                    best_dist=[]  #设置初始值比较大
+                    best_dist = []  # 设置初始值空
                     for j in range(num_template):
-                        dist = np.sqrt(np.sum(np.square(np.subtract(emb[j, :], emb[i+num_template, :]))))
+                        dist = np.sqrt(np.sum(np.square(np.subtract(emb[j, :], emb[i + num_template, :]))))
                         best_dist.append(dist)
-                    average_dist=min(best_dist)
-                    if average_dist<0.8:
-                        dist_list.append((dataset[class_index].image_paths[i],"match",average_dist))
+                    average_dist = min(best_dist)
+                    if average_dist < 0.544:
+                        dist_list.append((dataset[class_index].image_paths[i], "match", average_dist))
                         print(
-                            '匹配 %s  %d 相似度 %1.4f ' % (dataset[class_index].image_paths[i], best_dist.index(average_dist), average_dist))
+                            '匹配 %s  %d 相似度 %1.4f ' % (
+                            dataset[class_index].image_paths[i], best_dist.index(average_dist), average_dist))
                     else:
                         dist_list.append((dataset[class_index].image_paths[i], "no_match", average_dist))
-                        print('不匹配 %s  %d 相似度 %1.4f ' % (dataset[class_index].image_paths[i],best_dist.index(average_dist), average_dist))
-
+                        print('不匹配 %s  %d 相似度 %1.4f ' % (
+                        dataset[class_index].image_paths[i], best_dist.index(average_dist), average_dist))
 
                 if (os.path.isdir(template_exp)):
-                    np.save(template_exp+"template.npy",emb[:num_template])
-        class_index+=1
+                    np.save(template_exp + "template.npy", template_emb[:])
+
+                class_index+=1
 
     np.savetxt("data.csv", np.asarray(dist_list), fmt="%s", delimiter="\t")
 
 
-
+def get_images(aligned):
+    img_list = []
+    for i in aligned:
+        prewhitened = facenet.prewhiten(i)
+        # prewhitened =i
+        img_list.append(prewhitened[:, :, np.newaxis])  # 增加一维，满足灰度model 160x160x1的输入维度要求，如果是RGB model则不需要
+    images = np.stack(img_list)
+    return images
 
 
 
