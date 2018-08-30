@@ -39,7 +39,7 @@ def main(args):
     dataset=facenet.get_dataset(args.to_be_verified)
     num_target_class=len(dataset)
     class_index=0
-    target_image_index=[]
+
     with tf.Graph().as_default():
 
         with tf.Session() as sess:
@@ -58,12 +58,9 @@ def main(args):
             while class_index <num_target_class:
                 target_image_list=load_and_align_data(dataset[class_index].image_paths, args.image_size, args.margin,
                                                           args.gpu_memory_fraction)
-                target_image_index.append(len(target_image_list))
-                aligned=aligned[:num_template]
-                aligned.extend(target_image_list)
 
                 num_to_be_verified=len(dataset[class_index].image_paths)
-                target_images=get_images(aligned)
+                target_images=get_images(target_image_list)
 
 
 
@@ -74,14 +71,12 @@ def main(args):
                 print("start run model",time.time())#run model start timestamp
                 emb=sess.run(embeddings, feed_dict=feed_dict)
 
-                emb=np.vstack((template_emb,emb))#把templdate emb 和target emb 组合成一个数组，这样不用修改以前的比较算法
-
                 print("run model finished", time.time())
 
                 for i in range(num_to_be_verified):
                     best_dist = []  # 设置初始值空
                     for j in range(num_template):
-                        dist = np.sqrt(np.sum(np.square(np.subtract(emb[j, :], emb[i + num_template, :]))))
+                        dist = np.sqrt(np.sum(np.square(np.subtract(template_emb[j,:], emb[i,:]))))
                         best_dist.append(dist)
                     average_dist = min(best_dist)
                     if average_dist < 0.544:
