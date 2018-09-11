@@ -18,9 +18,13 @@ import lfw
 from tensorflow.python.ops import data_flow_ops
 
 from six.moves import xrange
+import os
+
+
 
 def main(args):
 
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"  #set GPU id=1
    #此处导入的是：models.inception_resnet_v1模型，以后再看怎么更改模型
     network = importlib.import_module(args.model_def)
    #用当前日期来命名模型
@@ -51,6 +55,8 @@ def main(args):
     print('Log directory: %s' % log_dir)
     if args.pretrained_model:#用在判断是否有预训练模型，但是如果有，怎么加载呢？
         print('Pre-trained model: %s' % os.path.expanduser(args.pretrained_model))
+
+
     
     if args.lfw_dir:
         print('LFW directory: %s' % args.lfw_dir)
@@ -443,13 +449,13 @@ def parse_arguments(argv):
     parser.add_argument('--models_base_dir', type=str,
         help='Directory where to write trained models and checkpoints.', default='~/models/facenet')
     parser.add_argument('--gpu_memory_fraction', type=float,
-        help='Upper bound on the amount of GPU memory that will be used by the process.', default=1.0)
+        help='Upper bound on the amount of GPU memory that will be used by the process.', default=0.25)
     parser.add_argument('--pretrained_model', type=str,
-        help='Load a pretrained model before training starts.')
+        help='Load a pretrained model before training starts.',default='/home/twan/python_code/facenet_example/models')
     parser.add_argument('--data_dir', type=str,
         help='Path to the data directory containing aligned face patches.',
         # default='~/datasets/casia/casia_maxpy_mtcnnalign_182_160')
-        default = 'E:/facenet/data/lfw_160')
+        default = '/home/twan/python_code/facenet_example/data/lfw160')
     parser.add_argument('--model_def', type=str,
         help='Model definition. Points to a module containing the definition of the inference graph.', default='models.inception_resnet_v1')
     parser.add_argument('--max_nrof_epochs', type=int,
@@ -491,7 +497,7 @@ def parse_arguments(argv):
     parser.add_argument('--seed', type=int,
         help='Random seed.', default=666)
     parser.add_argument('--learning_rate_schedule_file', type=str,
-        help='File containing the learning rate schedule that is used when learning_rate is set to to -1.', default='data/learning_rate_schedule.txt')
+        help='File containing the learning rate schedule that is used when learning_rate is set to to -1.', default='')
 
     # Parameters for validation on LFW
     parser.add_argument('--lfw_pairs', type=str,

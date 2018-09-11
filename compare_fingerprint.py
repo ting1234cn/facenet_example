@@ -14,8 +14,8 @@ import time
 
 
 def main(args):
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu  # set GPU id
     dist_list = []
-    aligned = []
     template_emb=[]
 
     #设置GPU Option
@@ -79,7 +79,7 @@ def main(args):
                         dist = np.sqrt(np.sum(np.square(np.subtract(template_emb[j,:], emb[i,:]))))
                         best_dist.append(dist)
                     average_dist = min(best_dist)
-                    if average_dist < 0.544:
+                    if average_dist < args.threshold:
                         dist_list.append((dataset[class_index].image_paths[i], "match", average_dist))
                         print(
                             '匹配 %s  %d 相似度 %1.4f ' % (
@@ -90,7 +90,7 @@ def main(args):
                         dataset[class_index].image_paths[i], best_dist.index(average_dist), average_dist))
 
                 if (os.path.isdir(template_exp)):
-                    np.save(template_exp + "template.npy", template_emb[:])
+                    np.save(template_exp + ".npy", template_emb[:])
 
                 class_index+=1
 
@@ -101,7 +101,7 @@ def get_images(aligned):
     img_list = []
     for i in aligned:
         prewhitened = facenet.prewhiten(i)
-        # prewhitened =i
+        #prewhitened =i
         img_list.append(prewhitened[:, :, np.newaxis])  # 增加一维，满足灰度model 160x160x1的输入维度要求，如果是RGB model则不需要
     images = np.stack(img_list)
     return images
@@ -152,6 +152,11 @@ def parse_arguments(argv):
                         help='Margin for the crop around the bounding box (height, width) in pixels.', default=44)
     parser.add_argument('--gpu_memory_fraction', type=float,
                         help='Upper bound on the amount of GPU memory that will be used by the process.', default=0.2)
+    parser.add_argument('--gpu', type=str,
+                        help='gpu id .',
+                        default='0')
+    parser.add_argument('--threshold', type=float,
+                        help='threshold to identify fingerprint',default=0.46)
     return parser.parse_args(argv)
 
 

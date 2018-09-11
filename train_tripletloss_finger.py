@@ -13,7 +13,7 @@ import importlib
 import itertools
 import argparse
 import facenet
-import lfw
+import lfw_finger
 
 from tensorflow.python.ops import data_flow_ops
 
@@ -24,13 +24,13 @@ import os
 
 def main(args):
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"  #set GPU id=1
-    tf.device('/gpu:1')
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu  #set GPU id=1
+
    #此处导入的是：models.inception_resnet_v1模型，以后再看怎么更改模型
     network = importlib.import_module(args.model_def)
    #用当前日期来命名模型
     subdir = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
-   #日志保存在c:\\users\\Administrator\logs\facenet\ 文件夹里
+
     log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), subdir)
     if not os.path.isdir(log_dir):  # Create the log directory if it doesn't exist
         os.makedirs(log_dir)  #没有日志文件就创建一个
@@ -62,9 +62,9 @@ def main(args):
     if args.lfw_dir:
         print('LFW directory: %s' % args.lfw_dir)
         # Read the file containing the pairs used for testing
-        pairs = lfw.read_pairs(os.path.expanduser(args.lfw_pairs))
+        #pairs = lfw.read_pairs(os.path.expanduser(args.lfw_pairs))
         # Get the paths for the corresponding images
-        lfw_paths, actual_issame = lfw.get_paths(os.path.expanduser(args.lfw_dir), pairs, args.lfw_file_ext)
+        lfw_paths, actual_issame = lfw_finger.get_paths(os.path.expanduser(args.lfw_dir),os.path.expanduser(args.lfw_validate_dir) )
         
     #建立图
    #with语句适用于对资源进行访问的场合，确保使用过程中是否发生异常都会执行必要嘚瑟“清理”操作
@@ -90,18 +90,19 @@ def main(args):
         #enqueue_many返回的是一个操作
         enqueue_op = input_queue.enqueue_many([image_paths_placeholder, labels_placeholder])
         
-        nrof_preprocess_threads = 2
+        nrof_preprocess_threads =2
         grey_channel = 1
         images_and_labels = []
         for _ in range(nrof_preprocess_threads):
             filenames, label = input_queue.dequeue()
+
             images = []
             for filename in tf.unstack(filenames):
                 file_contents = tf.read_file(filename)
 
                 image = tf.image.decode_image(file_contents, channels=grey_channel)
                 if args.random_crop:
-                    image = tf.random_crop(image, [args.image_size, args.image_size, 3])
+                    image = tf.random_crop(image, [args.image_size, args.image_size, grey_channel])
                 else:
                     image = tf.image.resize_image_with_crop_or_pad(image, args.image_size, args.image_size)
                 if args.random_flip:
@@ -263,7 +264,7 @@ def train(args, sess, dataset, epoch, image_paths_placeholder, labels_placeholde
         train_time = 0
         i = 0
         emb_array = np.zeros((nrof_examples, embedding_size))
-        loss_array = np.zeros((nrof_triplets,))
+        #loss_array = np.zeros((nrof_triplets,))
         # 根据求出的特征计算triplet损失函数并进行优化
         summary = tf.Summary()
         while i < nrof_batches:
@@ -271,11 +272,13 @@ def train(args, sess, dataset, epoch, image_paths_placeholder, labels_placeholde
             batch_size = min(nrof_examples-i*args.batch_size, args.batch_size)
             feed_dict = {batch_size_placeholder: batch_size, learning_rate_placeholder: lr, phase_train_placeholder: True}
             #sess run 有5个输入，fetches，先运行loss。前向计算的损失，train_op是根据损失来计算梯度，来对参数进行优化
-            err, _, step, emb, lab = sess.run([loss, train_op, global_step, embeddings, labels_batch], feed_dict=feed_dict)
+            #merged_summary,err, _, step, emb, lab = sess.run([summary_op,loss, train_op, global_step, embeddings, labels_batch], feed_dict=feed_dict)#add summary_op
+            err, _, step, emb, lab = sess.run(
+                [loss, train_op, global_step, embeddings, labels_batch], feed_dict=feed_dict)
             emb_array[lab,:] = emb
-            loss_array[i] = err
+            #loss_array[i] = err #似乎没有用到
             duration = time.time() - start_time
-            print('Epoch: [%d][%d/%d]\tTime %.3f\tLoss %2.3f' %
+            print('Epoch: [%d][%d/%d]\tTime %.3f\tLoss %2.5f' %
                   (epoch, batch_number+1, args.epoch_size, duration, err))
             batch_number += 1
             i += 1
@@ -286,6 +289,7 @@ def train(args, sess, dataset, epoch, image_paths_placeholder, labels_placeholde
         #pylint: disable=maybe-no-member
         summary.value.add(tag='time/selection', simple_value=selection_time)
         summary_writer.add_summary(summary, step)
+        #summary_writer.add_summary(merged_summary, step)#add merged summary from summary op
     return step
 
 
@@ -338,9 +342,9 @@ def select_triplets(embeddings, nrof_images_per_class, image_paths, people_per_b
 # 默认：选择40张人脸图片作为正样本，随机筛选其他人脸图片作为负样本
 def sample_people(dataset, people_per_batch, images_per_person):
     # 总共应该抽取多少张    people_per_batch：45  images_per_person：40
-    nrof_images = people_per_batch * images_per_person
+    #nrof_images = people_per_batch * images_per_person
     # 因为数据量不够，暂时用这个代替
-    # nrof_images = 900
+    nrof_images = min(3000,people_per_batch * images_per_person)
   
     # 数据集中一共有多少个不同人的图像
     nrof_classes = len(dataset)
@@ -398,7 +402,7 @@ def evaluate(sess, image_paths, embeddings, labels_batch, image_paths_placeholde
     
     assert(np.all(label_check_array==1))
     
-    _, _, accuracy, val, val_std, far = lfw.evaluate(emb_array, actual_issame, nrof_folds=nrof_folds)
+    _, fpr, accuracy, val, val_std, far = lfw_finger.evaluate(emb_array, actual_issame, nrof_folds=nrof_folds)
     
     print('Accuracy: %1.3f+-%1.3f' % (np.mean(accuracy), np.std(accuracy)))
     print('Validation rate: %2.5f+-%2.5f @ FAR=%2.5f' % (val, val_std, far))
@@ -408,6 +412,8 @@ def evaluate(sess, image_paths, embeddings, labels_batch, image_paths_placeholde
     #pylint: disable=maybe-no-member
     summary.value.add(tag='lfw/accuracy', simple_value=np.mean(accuracy))
     summary.value.add(tag='lfw/val_rate', simple_value=val)
+    summary.value.add(tag='lfw/fpr', simple_value=fpr)
+    summary.value.add(tag='lfw/far', simple_value=far)
     summary.value.add(tag='time/lfw', simple_value=lfw_time)
     summary_writer.add_summary(summary, step)
     with open(os.path.join(log_dir,'lfw_result.txt'),'at') as f:
@@ -458,28 +464,29 @@ def parse_arguments(argv):
     parser.add_argument('--models_base_dir', type=str,
         help='Directory where to write trained models and checkpoints.', default='~/models/facenet_finger')
     parser.add_argument('--gpu_memory_fraction', type=float,
-        help='Upper bound on the amount of GPU memory that will be used by the process.', default=0.5)
+        help='Upper bound on the amount of GPU memory that will be used by the process.', default=0.9)
     parser.add_argument('--pretrained_model', type=str,
-        help='Load a pretrained model before training starts.',default='')
-                        #default='/home/twan/python_code/facenet_example/models/20170512-110547.pb')
+        help='Load a pretrained model before training starts.')
+    #,default='~/models/facenet_finger/20180831-153033')
+
     parser.add_argument('--data_dir', type=str,
         help='Path to the data directory containing aligned face patches.',
         # default='~/datasets/casia/casia_maxpy_mtcnnalign_182_160')
-        default = '/home/twan/python_code/facenet_example/data/finger_train_set')
+        default = '/home/twan/python_code/facenet_example/data/finger_train_set_180')
     parser.add_argument('--model_def', type=str,
         help='Model definition. Points to a module containing the definition of the inference graph.', default='models.inception_resnet_v1')
     parser.add_argument('--max_nrof_epochs', type=int,
-        help='Number of epochs to run.', default=500)
+        help='Number of epochs to run.', default=1000)#oringal value is 1000
     parser.add_argument('--batch_size', type=int,
         help='Number of images to process in a batch.', default=90)
     parser.add_argument('--image_size', type=int,
         help='Image size (height, width) in pixels.', default=160)
     parser.add_argument('--people_per_batch', type=int,
-        help='Number of people per batch.', default=10) #finger batch set as 10, orginal is 45
+        help='Number of people per batch.', default=60) #finger batch set as 10, orginal is 45
     parser.add_argument('--images_per_person', type=int,
-        help='Number of images per person.', default=15)#finger set as 15, oringal  is 20
+        help='Number of images per person.', default=50)#finger set as 15, oringal  is 20 ; image_per_person*people_per_batch 要求是3的倍数
     parser.add_argument('--epoch_size', type=int,
-        help='Number of batches per epoch.', default=100)#original value is 1000
+        help='Number of batches per epoch.', default=1000)#original value is 1000
     parser.add_argument('--alpha', type=float,
         help='Positive to negative triplet distance margin.', default=0.2)
     parser.add_argument('--embedding_size', type=int,
@@ -490,34 +497,37 @@ def parse_arguments(argv):
     parser.add_argument('--random_flip', 
         help='Performs random horizontal flipping of training images.', action='store_true')
     parser.add_argument('--keep_probability', type=float,
-        help='Keep probability of dropout for the fully connected layer(s).', default=1.0)
+        help='Keep probability of dropout for the fully connected layer(s).', default=0.8)#original value 1.0
     parser.add_argument('--weight_decay', type=float,
-        help='L2 weight regularization.', default=0.0)
+        help='L2 weight r'
+             'egularization.', default=0.0)
     parser.add_argument('--optimizer', type=str, choices=['ADAGRAD', 'ADADELTA', 'ADAM', 'RMSPROP', 'MOM'],
         help='The optimization algorithm to use', default='ADAGRAD')
     parser.add_argument('--learning_rate', type=float,
         help='Initial learning rate. If set to a negative value a learning rate ' +
-        'schedule can be specified in the file "learning_rate_schedule.txt"', default=0.1)
+        'schedule can be specified in the file "learning_rate_schedule.txt"', default=0.03)#original value 0.1
     parser.add_argument('--learning_rate_decay_epochs', type=int,
-        help='Number of epochs between learning rate decay.', default=100)
+        help='Number of epochs between learning rate decay.', default=50)#oringal value is 100
     parser.add_argument('--learning_rate_decay_factor', type=float,
-        help='Learning rate decay factor.', default=1.0)
+        help='Learning rate decay factor.', default=0.9999)#oringal value 1.0
     parser.add_argument('--moving_average_decay', type=float,
         help='Exponential decay for tracking of training parameters.', default=0.9999)
     parser.add_argument('--seed', type=int,
         help='Random seed.', default=666)
     parser.add_argument('--learning_rate_schedule_file', type=str,
         help='File containing the learning rate schedule that is used when learning_rate is set to to -1.', default='data/learning_rate_schedule.txt')
-
+    parser.add_argument('--gpu', type=str,
+                        help='gpu id .',
+                        default='0')
     # Parameters for validation on LFW
-    parser.add_argument('--lfw_pairs', type=str,
-        help='The file containing the pairs to use for validation.', default='data/pairs.txt')
+    parser.add_argument('--lfw_validate_dir', type=str,
+        help='The file containing the validation pic')
     parser.add_argument('--lfw_file_ext', type=str,
         help='The file extension for the LFW dataset.', default='png', choices=['jpg', 'png'])
     parser.add_argument('--lfw_dir', type=str,
         help='Path to the data directory containing aligned face patches.', default='')
     parser.add_argument('--lfw_nrof_folds', type=int,
-        help='Number of folds to use for cross validation. Mainly used for testing.', default=10)
+        help='Number of folds to use for cross validation. Mainly used for testing.', default=5)#original value is 10
     return parser.parse_args(argv)
   
 

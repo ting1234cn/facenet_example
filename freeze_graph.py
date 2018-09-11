@@ -74,6 +74,7 @@ def parse_arguments(argv):
         help='Directory containing the metagraph (.meta) file and the checkpoint (ckpt) file containing model parameters')
     parser.add_argument('output_file', type=str, 
         help='Filename for the exported graphdef protobuf (.pb)')
+
     return parser.parse_args(argv)
 
 if __name__ == '__main__':
