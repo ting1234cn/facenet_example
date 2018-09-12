@@ -17,6 +17,8 @@ def main(args):
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu  # set GPU id
     dist_list = []
     template_emb=[]
+    best_threshold = 1
+    target_image_path=[]
 
     #设置GPU Option
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
@@ -37,6 +39,8 @@ def main(args):
         template_images=get_images(aligned)
 
     dataset=facenet.get_dataset(args.to_be_verified)
+    for path in dataset[:]:
+        target_image_path.extend(path.image_paths)
     num_target_class=len(dataset)
     class_index=0
 
@@ -54,7 +58,7 @@ def main(args):
                 print("start run model", time.time())  # run model start timestamp
                 template_emb = sess.run(embeddings, feed_dict=feed_dict)
                 print("run model finished", time.time())
-
+            target_emb=[]
             while class_index <num_target_class:
                 target_image_list=load_and_align_data(dataset[class_index].image_paths, args.image_size, args.margin,
                                                           args.gpu_memory_fraction)
@@ -70,15 +74,31 @@ def main(args):
 
                 print("start run model",time.time())#run model start timestamp
                 emb=sess.run(embeddings, feed_dict=feed_dict)
+                target_emb.extend(emb)
+                #np.concatenate((target_emb,emb))
 
                 print("run model finished", time.time())
 
                 for i in range(num_to_be_verified):
                     best_dist = []  # 设置初始值空
+                    finger_id_index = dataset[class_index].image_paths[i].rfind('U')
+                    finger_id = dataset[class_index].image_paths[i][finger_id_index:finger_id_index + 10]
+                    issame=False
+                    for path in template[0].image_paths:
+                        if path.find(finger_id)==-1:
+                            issame = False
+                        else:
+                            issame= True
+                            break
+
+
                     for j in range(num_template):
                         dist = np.sqrt(np.sum(np.square(np.subtract(template_emb[j,:], emb[i,:]))))
                         best_dist.append(dist)
                     average_dist = min(best_dist)
+                    if average_dist<best_threshold and issame==False:
+                        best_threshold=average_dist
+
                     if average_dist < args.threshold:
                         dist_list.append((dataset[class_index].image_paths[i], "match", average_dist))
                         print(
@@ -88,13 +108,68 @@ def main(args):
                         dist_list.append((dataset[class_index].image_paths[i], "no_match", average_dist))
                         print('不匹配 %s  %d 相似度 %1.4f ' % (
                         dataset[class_index].image_paths[i], best_dist.index(average_dist), average_dist))
-
-                if (os.path.isdir(template_exp)):
-                    np.save(template_exp + ".npy", template_emb[:])
-
-                class_index+=1
+                class_index += 1
+            for threshold in np.arange(0,2,0.05):
+                evaluate(threshold,template_emb,template[0].image_paths,np.asarray(target_emb),target_image_path)
+            frr,far=evaluate(best_threshold, template_emb, template[0].image_paths, np.asarray(target_emb), target_image_path)
+            if (os.path.isdir(template_exp)):
+                np.save(template_exp + ".npy", template_emb[:])
+            print("best threshold %f with 0 FAR" % best_threshold)
 
     np.savetxt("data.csv", np.asarray(dist_list), fmt="%s", delimiter="\t")
+    model_exp = os.path.expanduser(args.model)
+    if (os.path.isfile(model_exp)):
+        print('Model filename: %s' % model_exp)
+    else:
+        print('Model directory: %s' % model_exp)
+        meta_file, ckpt_file = facenet.get_model_filenames(model_exp)
+    with open('validation_result.txt','at') as f:
+        f.write('model %s\t%s\t threshold %.5f\t frr %.5f\t far %.5f\n' % (meta_file,ckpt_file,best_threshold, frr, far))
+
+def evaluate(threshold,template_emb, template_paths,target_emb,target_paths):
+    issame=[]
+
+    false_reject=0
+    true_accept=0
+    false_accept=0
+    true_reject=0
+    i=0
+    for target_path in target_paths:
+
+        dist_list=[]
+        finger_id_index=target_path.rfind('U')
+        finger_id=target_path[finger_id_index:finger_id_index+10]
+        j = 0
+        for template_path in template_paths:
+            dist = np.sqrt(np.sum(np.square(np.subtract(template_emb[j,:], target_emb[i,:]))))
+            dist_list.append(dist)
+            j += 1
+        best_dist=min(dist_list)
+        if template_paths[0].find(finger_id)==-1:
+            issame.append(False)
+            if best_dist<=threshold:
+                false_accept+=1
+            else:
+                true_reject+=1
+        else:
+            issame.append(True)
+            if best_dist>threshold:
+                false_reject+=1
+            else:
+                true_accept+=1
+
+        i+=1
+    if false_reject > 0:
+        frr=float(false_reject/issame.count(True))
+    else:
+        frr=0
+    if false_accept > 0:
+        far=float(false_accept/issame.count(False))
+    else:
+        far=0
+    print("threshold %f ; FRR %f  ; FAR %f" %(threshold,frr,far))
+    return frr, far
+
 
 
 def get_images(aligned):
@@ -156,7 +231,7 @@ def parse_arguments(argv):
                         help='gpu id .',
                         default='0')
     parser.add_argument('--threshold', type=float,
-                        help='threshold to identify fingerprint',default=0.46)
+                        help='threshold to identify fingerprint',default=0.8)
     return parser.parse_args(argv)
 
 
