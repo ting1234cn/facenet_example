@@ -16,13 +16,16 @@ def rename_image(file_name,type="jpeg"):
     if type is "jpeg":
         file_name=file_name.replace('.bmp','')
         if file_name.find("dry")!=-1:
+            file_name = file_name.replace('_dry.jpg', '')
             new_file_name=file_name+"_dry.jpg"
 
         elif file_name.find("light")!=-1:
+            file_name = file_name.replace('_light.jpg', '')
             new_file_name = file_name + "_light.jpg"
         else:
+            file_name = file_name.replace('.jpg', '')
             new_file_name = file_name + ".jpg"
-        out = im.resize((180, 180), Image.ANTIALIAS)
+        out = im.resize((240, 240), Image.ANTIALIAS)
         out.save(new_file_name,'JPEG',quality=95)
         im.close()
         return new_file_name
@@ -39,21 +42,25 @@ def get_image_path(input_dir):
                 if os.path.isfile(os.path.join(input_dir, path))]
     new_dirs=[]
     for filename in filenames:
+        if filename.find(".db")!=-1:
+            continue
         filename=filename[:10]
         new_dir=os.path.join(input_dir, filename)
-        if new_dir in new_dirs:
+        if (new_dir in new_dirs) or input_dir.find(filename)!=-1:
             pass
         else:
             new_dirs.append(new_dir)
             os.mkdir(new_dir)
 
     for path in img_paths:
+        if path.find(".db")!=-1:
+            continue
         new_file_name=rename_image(path)
         for new_dir in new_dirs:
             if path.find(new_dir)!=-1:
 
                 shutil.move(new_file_name,new_dir)
-                os.remove(path)
+#                os.remove(path)
                 print("original file %s destination file %s" %(new_file_name, new_dir))
         #os.remove(path)
 

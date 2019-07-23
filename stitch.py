@@ -1,10 +1,10 @@
 # coding: utf-8
-import numpy as np
+import os
+
 import cv2 as cv
+import numpy as np
 from matplotlib import pyplot as plt
-import sys
-import os,shutil
-import argparse
+
 
 def stitch_new(img1,img2,top, bot, left, right,min_match_count=19):
     srcImg = cv.copyMakeBorder(img1, top, bot, left, right, cv.BORDER_CONSTANT, value=(0, 0, 0))
@@ -19,7 +19,7 @@ def stitch_new(img1,img2,top, bot, left, right,min_match_count=19):
     plt.show()
     return result[1]
 
-def stitch(img1,img2,top, bot, left, right,min_match_count=19):
+def stitch(img1,img2,top, bot, left, right,min_match_count=15):
     srcImg = cv.copyMakeBorder(img1, top, bot, left, right, cv.BORDER_CONSTANT, value=(0, 0, 0))
     testImg = cv.copyMakeBorder(img2, top, bot, left, right, cv.BORDER_CONSTANT, value=(0, 0, 0))
     #srcImg=img1
@@ -57,7 +57,7 @@ def stitch(img1,img2,top, bot, left, right,min_match_count=19):
     #plt.imshow(img3, ), plt.show()
     rows, cols = srcImg.shape[:2]
     MIN_MATCH_COUNT = min_match_count
-    MAX_MATCH_COUNT=450
+    MAX_MATCH_COUNT=1300
     if len(good) > MIN_MATCH_COUNT and len(good)<MAX_MATCH_COUNT:
         src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
         dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)

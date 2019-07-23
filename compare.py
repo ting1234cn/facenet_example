@@ -16,7 +16,7 @@ import argparse
 import facenet
 import align.detect_face
 # import detect_face
-from PIL import Image
+#from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
@@ -70,19 +70,15 @@ def main(args):
 
 
                     if min_dist>=0.8:
-                        print("min dist %f ,no similar face" %min_dist)
+                        print("no similar face")
                         pass
                     else:
-                        print("min dist %f" % min_dist)
-                        #plt.figure("最相似的人脸",)
+                        plt.figure("最相似的人脸")
                         plt.subplot(121)
                         plt.imshow(aligned[i])
-
                         plt.subplot(122)
                         plt.imshow(aligned[min_face])
-                        plt.title("最相似的人脸",fontproperties="SimHei",color="r")
-                        #plt.suptitle("最相似的人脸",fontproperties="SimHei",color="r")
-
+                        #plt.text(0,0,"相似度高",fontproperties="SimHei",color="r")
                         plt.show()
 
 
@@ -113,7 +109,7 @@ def load_and_align_data(image_paths, image_size, margin, gpu_memory_fraction):
     img_list = []
     nrof_face_list=[]
     for image in tmp_image_paths:
-        img = misc.imread(os.path.expanduser(image), mode='RGB')
+        img = misc.imread(image, mode='RGB')
         img_size = np.asarray(img.shape)[0:2]
         bounding_boxes, _ = align.detect_face.detect_face(img, minsize, pnet, rnet, onet, threshold, factor)
         # bounding_boxes, _ = detect_face.detect_face(img, minsize, pnet, rnet, onet, threshold, factor)
