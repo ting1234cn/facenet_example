@@ -2,8 +2,8 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
 from datetime import datetime
+
 import os.path
 import time
 import sys
@@ -14,6 +14,9 @@ import itertools
 import argparse
 import facenet
 import lfw_finger
+import compare_fingerprint
+import shutil
+import random
 
 from tensorflow.python.ops import data_flow_ops
 
@@ -27,14 +30,15 @@ def main(args):
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu  #set GPU id=1
 
    #此处导入的是：models.inception_resnet_v1模型，以后再看怎么更改模型
+    print("model", args.model_def)
     network = importlib.import_module(args.model_def)
    #用当前日期来命名模型
     subdir = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
 
-    log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), subdir)
+    log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), args.model_def,"gpu"+args.gpu,subdir)
     if not os.path.isdir(log_dir):  # Create the log directory if it doesn't exist
         os.makedirs(log_dir)  #没有日志文件就创建一个
-    model_dir = os.path.join(os.path.expanduser(args.models_base_dir), subdir)
+    model_dir = os.path.join(os.path.expanduser(args.models_base_dir), args.model_def,subdir)
     if not os.path.isdir(model_dir):  # Create the model directory if it doesn't exist
         os.makedirs(model_dir)
 
@@ -81,10 +85,10 @@ def main(args):
         #图像路径
         image_paths_placeholder = tf.placeholder(tf.string, shape=(None,3), name='image_paths')
         # 图像标签
-        labels_placeholder = tf.placeholder(tf.int64, shape=(None,3), name='labels')
+        labels_placeholder = tf.placeholder(tf.int8, shape=(None,3), name='labels')
         #新建一个队列，数据流操作，fifo先入先出
         input_queue = data_flow_ops.FIFOQueue(capacity=100000,
-                                    dtypes=[tf.string, tf.int64],
+                                    dtypes=[tf.string, tf.int8],
                                     shapes=[(3,), (3,)],
                                     shared_name=None, name=None)
         #enqueue_many返回的是一个操作
@@ -102,7 +106,10 @@ def main(args):
 
                 image = tf.image.decode_image(file_contents, channels=grey_channel)
                 if args.random_crop:
+                    image=tf.image.rot90(image, k=random.randint(0,1))
+                    image = tf.image.random_flip_left_right(image)
                     image = tf.random_crop(image, [args.image_size, args.image_size, grey_channel])
+
                 else:
                     image = tf.image.resize_image_with_crop_or_pad(image, args.image_size, args.image_size)
                 if args.random_flip:
@@ -137,7 +144,7 @@ def main(args):
         #将指数衰减应用在学习率上
         learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
             args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
-        tf.summary.scalar('learning_rate', learning_rate)
+        #tf.summary.scalar('learning_rate', learning_rate)
 
         # 计算损失
         regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
@@ -147,7 +154,7 @@ def main(args):
         # Build a Graph that trains the model with one batch of examples and updates the model parameters
         # 确定优化方法并根据损失函数求梯度，在这里，每更行一次参数，global_step会加1
         train_op = facenet.train(total_loss, global_step, args.optimizer, 
-            learning_rate, args.moving_average_decay, tf.global_variables())
+            learning_rate, args.moving_average_decay, tf.global_variables(),log_histograms=False)
         
         # Create a saver创建一个saver用来保存或者从内存中回复一个模型参数
         saver = tf.train.Saver(tf.trainable_variables(), max_to_keep=3)
@@ -182,7 +189,7 @@ def main(args):
                 print('Restoring pretrained model: %s' % args.pretrained_model)
                 #saver.restore(sess, os.path.expanduser(args.pretrained_model))
                 facenet.load_model(os.path.expanduser(args.pretrained_model))
-
+            summary = tf.Summary()
             # Training and validation loop
             epoch = 0
             #将所有数据过一遍的次数   默认500
@@ -191,19 +198,34 @@ def main(args):
                 #epoch_size是一个epoch中批的个数，这个epoch是全局的批处理个数以一个epoch中。。。这个epoch将用于求学习率
                 epoch = step // args.epoch_size
                 # Train for one epoch
-                train(args, sess, train_set, epoch, image_paths_placeholder, labels_placeholder, labels_batch,
+                step=train(args, sess, train_set, epoch, image_paths_placeholder, labels_placeholder, labels_batch,
                     batch_size_placeholder, learning_rate_placeholder, phase_train_placeholder, enqueue_op, input_queue, global_step, 
                     embeddings, total_loss, train_op, summary_op, summary_writer, args.learning_rate_schedule_file,
                     args.embedding_size, anchor, positive, negative, triplet_loss)
 
                 # Save variables and the metagraph if it doesn't exist already
-                save_variables_and_metagraph(sess, saver, summary_writer, model_dir, subdir, step)
+                if epoch%10==0:
+                    metagraph_filename, checkpoint_path=save_variables_and_metagraph(sess, saver, summary_writer, model_dir, subdir, step)
 
                 # Evaluate on LFW
-                if args.lfw_dir:
-                    evaluate(sess, lfw_paths, embeddings, labels_batch, image_paths_placeholder, labels_placeholder, 
-                            batch_size_placeholder, learning_rate_placeholder, phase_train_placeholder, enqueue_op, actual_issame, args.batch_size, 
-                            args.lfw_nrof_folds, log_dir, step, summary_writer, args.embedding_size)
+                if args.lfw_dir and args.lfw_validate_dir:
+                    # evaluate(sess, lfw_paths, embeddings, labels_batch, image_paths_placeholder, labels_placeholder,
+            #                     #         batch_size_placeholder, learning_rate_placeholder, phase_train_placeholder, enqueue_op, actual_issame, args.batch_size,
+            #                     #         args.lfw_nrof_folds, log_dir, step, summary_writer, args.embedding_size)
+                    images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
+                    frr,far,best_threshold=compare_fingerprint.compare_new(args.lfw_dir,args.lfw_validate_dir,args.image_size,0.8,images_placeholder,
+                                                                       phase_train_placeholder,embeddings,sess,summary_writer)
+                    if frr<0.1 and far<0.1:
+                        #shutil.copy(metagraph_filename,"/home/twan/python_code/facenet_example/finger_models/")
+                        #shutil.copy(checkpoint_path+"*", "/home/twan/python_code/facenet_example/finger_models/")
+                        save_variables_and_metagraph(sess, saver, summary_writer, "/home/twan/python_code/facenet_example/finger_models/", subdir, step)
+
+
+                    summary.value.add(tag='lfw/frr', simple_value=frr)
+                    summary.value.add(tag='lfw/far', simple_value=far)
+                    summary.value.add(tag='lfw/best_threshold', simple_value=best_threshold)
+                    #summary.value.add(tag='learning rate',simple_value=learning_rate)
+                    summary_writer.add_summary(summary, step)
 
     return model_dir
 
@@ -277,18 +299,20 @@ def train(args, sess, dataset, epoch, image_paths_placeholder, labels_placeholde
                 [loss, train_op, global_step, embeddings, labels_batch], feed_dict=feed_dict)
             emb_array[lab,:] = emb
             #loss_array[i] = err #似乎没有用到
-            duration = time.time() - start_time
-            print('Epoch: [%d][%d/%d]\tTime %.3f\tLoss %2.5f' %
-                  (epoch, batch_number+1, args.epoch_size, duration, err))
+
+            if (batch_number+1)%100==0:
+                duration = time.time() - start_time
+                print('Epoch: [%d][%d/%d]\tTime %.3f\tsav %2.5f' %(epoch, batch_number+1, args.epoch_size, duration, err))
             batch_number += 1
             i += 1
-            train_time += duration
+            #train_time += duration  #seems not used
             summary.value.add(tag='loss', simple_value=err)
+            summary_writer.add_summary(summary, step)
             
         # Add validation loss and accuracy to summary
         #pylint: disable=maybe-no-member
-        summary.value.add(tag='time/selection', simple_value=selection_time)
-        summary_writer.add_summary(summary, step)
+        # summary.value.add(tag='time/selection', simple_value=selection_time)
+
         #summary_writer.add_summary(merged_summary, step)#add merged summary from summary op
     return step
 
@@ -421,12 +445,12 @@ def evaluate(sess, image_paths, embeddings, labels_batch, image_paths_placeholde
 
 def save_variables_and_metagraph(sess, saver, summary_writer, model_dir, model_name, step):
     # Save the model checkpoint
-    print('Saving variables')
+    #print('Saving variables')
     start_time = time.time()
     checkpoint_path = os.path.join(model_dir, 'model-%s.ckpt' % model_name)
     saver.save(sess, checkpoint_path, global_step=step, write_meta_graph=False)
     save_time_variables = time.time() - start_time
-    print('Variables saved in %.2f seconds' % save_time_variables)
+    #print('Variables saved in %.2f seconds' % save_time_variables)
     metagraph_filename = os.path.join(model_dir, 'model-%s.meta' % model_name)
     save_time_metagraph = 0  
     if not os.path.exists(metagraph_filename):
@@ -435,11 +459,12 @@ def save_variables_and_metagraph(sess, saver, summary_writer, model_dir, model_n
         saver.export_meta_graph(metagraph_filename)
         save_time_metagraph = time.time() - start_time
         print('Metagraph saved in %.2f seconds' % save_time_metagraph)
-    summary = tf.Summary()
-    #pylint: disable=maybe-no-member
-    summary.value.add(tag='time/save_variables', simple_value=save_time_variables)
-    summary.value.add(tag='time/save_metagraph', simple_value=save_time_metagraph)
-    summary_writer.add_summary(summary, step)
+    # summary = tf.Summary()
+    # #pylint: disable=maybe-no-member
+    # summary.value.add(tag='time/save_variables', simple_value=save_time_variables)
+    # summary.value.add(tag='time/save_metagraph', simple_value=save_time_metagraph)
+    # summary_writer.add_summary(summary, step)
+    return metagraph_filename,checkpoint_path
   
   
 def get_learning_rate_from_file(filename, epoch):
@@ -476,17 +501,17 @@ def parse_arguments(argv):
     parser.add_argument('--model_def', type=str,
         help='Model definition. Points to a module containing the definition of the inference graph.', default='models.inception_resnet_v1')
     parser.add_argument('--max_nrof_epochs', type=int,
-        help='Number of epochs to run.', default=1000)#oringal value is 1000
+        help='Number of epochs to run.', default=5000)#oringal value is 1000
     parser.add_argument('--batch_size', type=int,
         help='Number of images to process in a batch.', default=90)
     parser.add_argument('--image_size', type=int,
         help='Image size (height, width) in pixels.', default=160)
     parser.add_argument('--people_per_batch', type=int,
-        help='Number of people per batch.', default=60) #finger batch set as 10, orginal is 45
+        help='Number of people per batch.', default=30) #finger batch set as 10, orginal is 45
     parser.add_argument('--images_per_person', type=int,
-        help='Number of images per person.', default=50)#finger set as 15, oringal  is 20 ; image_per_person*people_per_batch 要求是3的倍数
+        help='Number of images per person.', default=60)#finger set as 15, oringal  is 20 ; image_per_person*people_per_batch 要求是3的倍数
     parser.add_argument('--epoch_size', type=int,
-        help='Number of batches per epoch.', default=1000)#original value is 1000
+        help='Number of batches per epoch.', default=100)#original value is 1000
     parser.add_argument('--alpha', type=float,
         help='Positive to negative triplet distance margin.', default=0.2)
     parser.add_argument('--embedding_size', type=int,
@@ -497,19 +522,18 @@ def parse_arguments(argv):
     parser.add_argument('--random_flip', 
         help='Performs random horizontal flipping of training images.', action='store_true')
     parser.add_argument('--keep_probability', type=float,
-        help='Keep probability of dropout for the fully connected layer(s).', default=0.8)#original value 1.0
-    parser.add_argument('--weight_decay', type=float,
-        help='L2 weight r'
+        help='Keep probability of dropout for the fully connected layer(s).', default=0.9)#original value 1.0
+    parser.add_argument('--weight_decay', type=float, help='L2 weight r'
              'egularization.', default=0.0)
     parser.add_argument('--optimizer', type=str, choices=['ADAGRAD', 'ADADELTA', 'ADAM', 'RMSPROP', 'MOM'],
-        help='The optimization algorithm to use', default='ADAGRAD')
+        help='The optimization algorithm to use', default='ADADELTA') #original value is ADAGRAD
     parser.add_argument('--learning_rate', type=float,
         help='Initial learning rate. If set to a negative value a learning rate ' +
-        'schedule can be specified in the file "learning_rate_schedule.txt"', default=0.03)#original value 0.1
+        'schedule can be specified in the file "learning_rate_schedule.txt"', default=0.1)#original value 0.1
     parser.add_argument('--learning_rate_decay_epochs', type=int,
-        help='Number of epochs between learning rate decay.', default=50)#oringal value is 100
+        help='Number of epochs between learning rate decay.', default=100)#oringal value is 100
     parser.add_argument('--learning_rate_decay_factor', type=float,
-        help='Learning rate decay factor.', default=0.9999)#oringal value 1.0
+        help='Learning rate decay factor.', default=1.0)#oringal value 1.0
     parser.add_argument('--moving_average_decay', type=float,
         help='Exponential decay for tracking of training parameters.', default=0.9999)
     parser.add_argument('--seed', type=int,
